@@ -3,6 +3,7 @@ package csr
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
@@ -20,7 +21,6 @@ import (
 //in KeyRequest field
 
 func TestNew(t *testing.T) {
-
 	if cr := New(); cr.KeyRequest == nil {
 		t.Fatalf("Should create a new, empty certificate request with KeyRequest")
 	}
@@ -43,6 +43,10 @@ func TestKeyRequest(t *testing.T) {
 	case *ecdsa.PrivateKey:
 		if kr.Algo() != "ecdsa" {
 			t.Fatal("ECDSA key generated, but expected", kr.Algo())
+		}
+	case ed25519.PrivateKey:
+		if kr.Algo() != "ed25519" {
+			t.Fatal("Ed25519 key generated, but expected", kr.Algo())
 		}
 	}
 }
@@ -113,7 +117,7 @@ func TestParseRequest(t *testing.T) {
 		KeyRequest: NewKeyRequest(),
 		Extensions: []pkix.Extension{
 			pkix.Extension{
-				Id: asn1.ObjectIdentifier{1, 2, 3, 4, 5},
+				Id:    asn1.ObjectIdentifier{1, 2, 3, 4, 5},
 				Value: []byte("AgEB"),
 			},
 		},
@@ -123,7 +127,7 @@ func TestParseRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	
+
 	block, _ := pem.Decode(csrBytes)
 	if block == nil {
 		t.Fatalf("%v", err)
@@ -310,6 +314,21 @@ func TestECGeneration(t *testing.T) {
 	}
 }
 
+func TestED25519Generation(t *testing.T) {
+	kr := &KeyRequest{"ed25519", 256}
+	priv, err := kr.Generate()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	_, ok := priv.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatal("Expected ed25519 key")
+	}
+	if sa := kr.SigAlgo(); sa == x509.UnknownSignatureAlgorithm {
+		t.Fatal("Invalid signature algorithm!")
+	}
+}
+
 func TestRSAKeyGeneration(t *testing.T) {
 	var rsakey *rsa.PrivateKey
 
@@ -353,6 +372,13 @@ func TestBadKeyRequest(t *testing.T) {
 	if _, err := kr.Generate(); err == nil {
 		t.Fatal("Key generation should fail with invalid key size")
 	} else if sa := kr.SigAlgo(); sa != x509.SHA1WithRSA {
+		t.Fatal("The wrong signature algorithm was returned from SigAlgo!")
+	}
+
+	kr.A = "ed25519"
+	if _, err := kr.Generate(); err == nil {
+		t.Fatal("Key generation should fail with invalid key size")
+	} else if sa := kr.SigAlgo(); sa != x509.PureEd25519 {
 		t.Fatal("The wrong signature algorithm was returned from SigAlgo!")
 	}
 
@@ -403,6 +429,10 @@ func TestDefaultKeyRequest(t *testing.T) {
 		if DefaultKeyRequest.Algo() != "ecdsa" {
 			t.Fatal("Invalid default key request.")
 		}
+	case "Ed25519 PRIVATE KEY":
+		if DefaultKeyRequest.Algo() != "ed25519" {
+			t.Fatal("Invalid default key request.")
+		}
 	}
 }
 
@@ -422,6 +452,29 @@ func TestRSACertRequest(t *testing.T) {
 		CN:         "cloudflare.com",
 		Hosts:      []string{"cloudflare.com", "www.cloudflare.com", "jdoe@example.com", "https://www.cloudflare.com"},
 		KeyRequest: &KeyRequest{"rsa", 2048},
+	}
+	_, _, err := ParseRequest(req)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+// TestED25519CertRequest validates parsing a certificate request with an
+// ED25519 key.
+func TestED25519CertRequest(t *testing.T) {
+	var req = &CertificateRequest{
+		Names: []Name{
+			{
+				C:  "US",
+				ST: "California",
+				L:  "San Francisco",
+				O:  "CloudFlare",
+				OU: "Systems Engineering",
+			},
+		},
+		CN:         "cloudflare.com",
+		Hosts:      []string{"cloudflare.com", "www.cloudflare.com", "jdoe@example.com", "https://www.cloudflare.com"},
+		KeyRequest: &KeyRequest{"ed25519", 256},
 	}
 	_, _, err := ParseRequest(req)
 	if err != nil {

@@ -4,6 +4,7 @@ package csr
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -12,13 +13,17 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"net/mail"
 	"net/url"
 	"strings"
 
+	circled25519 "github.com/cloudflare/circl/sign/ed25519"
+
 	cferr "github.com/cloudflare/cfssl/errors"
 	"github.com/cloudflare/cfssl/helpers"
+	"github.com/cloudflare/cfssl/helpers/derhelpers"
 	"github.com/cloudflare/cfssl/log"
 )
 
@@ -85,6 +90,16 @@ func (kr *KeyRequest) Generate() (crypto.PrivateKey, error) {
 			return nil, errors.New("invalid curve")
 		}
 		return ecdsa.GenerateKey(curve, rand.Reader)
+	case "ed25519":
+		if kr.Size() != (circled25519.PrivateKeySize * 8) { // TODO: check if 0 is needed
+			fmt.Printf("\n %d %d \n", kr.Size(), circled25519.PrivateKeySize*8)
+			return nil, errors.New("ED25519 keys should be 256 bit long")
+		}
+		keypair, err := circled25519.GenerateKey(rand.Reader)
+		priv := make(ed25519.PrivateKey, ed25519.PrivateKeySize)
+		copy(priv[:32], keypair.GetPrivate())
+		copy(priv[32:], keypair.GetPublic())
+		return priv, err
 	default:
 		return nil, errors.New("invalid algorithm")
 	}
@@ -116,6 +131,8 @@ func (kr *KeyRequest) SigAlgo() x509.SignatureAlgorithm {
 		default:
 			return x509.ECDSAWithSHA1
 		}
+	case "ed25519":
+		return x509.PureEd25519
 	default:
 		return x509.UnknownSignatureAlgorithm
 	}
@@ -132,12 +149,12 @@ type CAConfig struct {
 // A CertificateRequest encapsulates the API interface to the
 // certificate request functionality.
 type CertificateRequest struct {
-	CN           string     `json:"CN" yaml:"CN"`
-	Names        []Name     `json:"names" yaml:"names"`
-	Hosts        []string   `json:"hosts" yaml:"hosts"`
-	KeyRequest   *KeyRequest `json:"key,omitempty" yaml:"key,omitempty"`
-	CA           *CAConfig  `json:"ca,omitempty" yaml:"ca,omitempty"`
-	SerialNumber string     `json:"serialnumber,omitempty" yaml:"serialnumber,omitempty"`
+	CN           string           `json:"CN" yaml:"CN"`
+	Names        []Name           `json:"names" yaml:"names"`
+	Hosts        []string         `json:"hosts" yaml:"hosts"`
+	KeyRequest   *KeyRequest      `json:"key,omitempty" yaml:"key,omitempty"`
+	CA           *CAConfig        `json:"ca,omitempty" yaml:"ca,omitempty"`
+	SerialNumber string           `json:"serialnumber,omitempty" yaml:"serialnumber,omitempty"`
 	Extensions   []pkix.Extension `json:"extensions,omitempty" yaml:"extensions,omitempty"`
 }
 
@@ -216,11 +233,21 @@ func ParseRequest(req *CertificateRequest) (csr, key []byte, err error) {
 			Bytes: key,
 		}
 		key = pem.EncodeToMemory(&block)
+	case ed25519.PrivateKey:
+		key, err = derhelpers.MarshalEd25519PrivateKey(priv)
+		if err != nil {
+
+		}
+		block := pem.Block{
+			Type:  "Ed25519 PRIVATE KEY",
+			Bytes: key,
+		}
+		key = pem.EncodeToMemory(&block)
 	default:
 		panic("Generate should have failed to produce a valid key.")
 	}
 
-	csr, err = Generate(priv.(crypto.Signer), req)
+	csr, err = Generate(priv.(crypto.Signer), req) // TODO: solve
 	if err != nil {
 		log.Errorf("failed to generate a CSR: %v", err)
 		err = cferr.Wrap(cferr.CSRError, cferr.BadRequest, err)
@@ -430,12 +457,12 @@ func appendCAInfoToCSR(reqConf *CAConfig, csr *x509.CertificateRequest) error {
 	}
 
 	csr.ExtraExtensions = append(csr.ExtraExtensions, pkix.Extension{
-			Id:       asn1.ObjectIdentifier{2, 5, 29, 19},			
-			Value:    val,
-			Critical: true,		
-		})
+		Id:       asn1.ObjectIdentifier{2, 5, 29, 19},
+		Value:    val,
+		Critical: true,
+	})
 
-		return nil
+	return nil
 }
 
 // appendCAInfoToCSR appends user-defined extension to a CSR

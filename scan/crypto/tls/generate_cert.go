@@ -11,6 +11,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -40,6 +41,8 @@ func publicKey(priv interface{}) interface{} {
 	switch k := priv.(type) {
 	case *rsa.PrivateKey:
 		return &k.PublicKey
+	case *ed25519.PrivateKey:
+		return &k.Public()
 	case *ecdsa.PrivateKey:
 		return &k.PublicKey
 	default:
@@ -58,6 +61,13 @@ func pemBlockForKey(priv interface{}) *pem.Block {
 			os.Exit(2)
 		}
 		return &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}
+	case *ed25519.PrivateKey:
+		b, err := derhelpers.MarshalEd25519PrivateKey(priv)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to marshal ED25519 private key: %v", err)
+			os.Exit(2)
+		}
+		return &pem.Block{Type: "Ed25519 PRIVATE KEY", Bytes: b}
 	default:
 		return nil
 	}
@@ -75,6 +85,8 @@ func main() {
 	switch *ecdsaCurve {
 	case "":
 		priv, err = rsa.GenerateKey(rand.Reader, *rsaBits)
+	case "ED25519":
+		_, priv, err = ed25519.GenerateKey(rand.Reader)
 	case "P224":
 		priv, err = ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
 	case "P256":
